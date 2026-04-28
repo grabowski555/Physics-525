@@ -1,8 +1,11 @@
 #%%
-import numpy as np
-import h5py
+from pathlib import Path
 
-#simulation parameters
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
+
+# simulation parameters
 c = 0.5
 va_over_c = 0.01
 q = 0.028
@@ -16,8 +19,39 @@ dx = 4
 dy = 4
 va_code = va_over_c * c
 
-def loadin_fields(filename,dx,dy):
-    with h5py.File(filename, "r") as f:
+MODULE_DIR = Path(__file__).resolve().parent
+
+def resolve_field_path(filename: str | Path) -> Path:
+    """Resolving the HDF5 field file"""
+    path = Path(filename).expanduser()
+    if path.is_absolute():
+        if path.exists():
+            return path
+        raise FileNotFoundError(f"Field file not found: {path}")
+
+    candidates = (
+        path,
+        Path.cwd() / path,
+        MODULE_DIR / path,
+        MODULE_DIR.parent / "CosmicRays" / path,
+        MODULE_DIR.parent / "dumpfolder" / path,
+    )
+    seen = []
+    for candidate in candidates:
+        candidate = candidate.resolve(strict=False)
+        if candidate in seen:
+            continue
+        seen.append(candidate)
+        if candidate.exists():
+            return candidate
+
+    searched = ", ".join(str(candidate) for candidate in seen)
+    raise FileNotFoundError(f"Field file not found: {filename}. Tried: {searched}")
+
+
+def loadin_fields(filename: str | Path, dx: float, dy: float):
+    resolved_filename = resolve_field_path(filename)
+    with h5py.File(resolved_filename, "r") as f:
         fields = {
             "Ex": f["Ex"][...].astype(np.float64),
             "Ey": f["Ey"][...].astype(np.float64),
@@ -27,203 +61,193 @@ def loadin_fields(filename,dx,dy):
             "Bz": f["Bz"][...].astype(np.float64),
         }
 
-    Nx, Ny = fields["Bx"].shape
-
+    nx, ny = fields["Bx"].shape
     grid = {
-        "Nx": Nx,
-        "Ny": Ny,
+        "Nx": nx,
+        "Ny": ny,
         "dx": float(dx),
         "dy": float(dy),
-        "Lx": float(Nx * dx),
-        "Ly": float(Ny * dy)
+        "Lx": float(nx * dx),
+        "Ly": float(ny * dy),
     }
     return fields, grid
 
-<<<<<<< ours
-=======
-fields, grid = loadin_fields(filename,dx,dy)
-
->>>>>>> theirs
-def bilinear_interp(field:np.ndarray, x:np.ndarray, y:np.ndarray, Lx:float, Ly:float):
-    nx,ny = field.shape
+# bilinear interpolation function
+def bilinear_interp(field: np.ndarray, x: np.ndarray, y: np.ndarray, Lx: float, Ly: float):
+    nx, ny = field.shape
     dx = Lx / nx
     dy = Ly / ny
 
-    x = np.mod(x,Lx)
-    y = np.mod(y,Ly)
+    x = np.mod(x, Lx)
+    y = np.mod(y, Ly)
 
-    ix = np.floor(x/dx).astype(int)
-    iy = np.floor(y/dy).astype(int)
+    ix = np.floor(x / dx).astype(int)
+    iy = np.floor(y / dy).astype(int)
     ix1 = (ix + 1) % nx
     iy1 = (iy + 1) % ny
 
-    F_00 = field[ix,iy]
-    F_01 = field[ix,iy1]
-    F_10 = field[ix1,iy]
-    F_11 = field[ix1,iy1]
+    f00 = field[ix, iy]
+    f01 = field[ix, iy1]
+    f10 = field[ix1, iy]
+    f11 = field[ix1, iy1]
 
     fx = (x - ix * dx) / dx
     fy = (y - iy * dy) / dy
 
     return (
-        (1 - fx)*(1 - fy)*F_00 
-        + (1-fx) * fy * F_01
-        + (1-fy) * fx * F_10
-        + fy * fx * F_11
+        (1 - fx) * (1 - fy) * f00
+        + (1 - fx) * fy * f01
+        + fx * (1 - fy) * f10
+        + fx * fy * f11
     )
 
+
 def interp_fields(pos: np.ndarray, fields: dict, grid: dict):
-    x = pos[:,0]
-    y = pos[:,1]
+    x = pos[:, 0]
+    y = pos[:, 1]
 
     Lx = grid["Lx"]
     Ly = grid["Ly"]
 
-    ex = bilinear_interp(fields["Ex"],x,y,Lx,Ly)
-    ey = bilinear_interp(fields["Ey"],x,y,Lx,Ly)
-    ez = bilinear_interp(fields["Ez"],x,y,Lx,Ly)
-    bx = bilinear_interp(fields["Bx"],x,y,Lx,Ly)
-    by = bilinear_interp(fields["By"],x,y,Lx,Ly)
-    bz = bilinear_interp(fields["Bz"],x,y,Lx,Ly)
+    ex = bilinear_interp(fields["Ex"], x, y, Lx, Ly)
+    ey = bilinear_interp(fields["Ey"], x, y, Lx, Ly)
+    ez = bilinear_interp(fields["Ez"], x, y, Lx, Ly)
+    bx = bilinear_interp(fields["Bx"], x, y, Lx, Ly)
+    by = bilinear_interp(fields["By"], x, y, Lx, Ly)
+    bz = bilinear_interp(fields["Bz"], x, y, Lx, Ly)
 
-    e_field = np.stack([ex,ey,ez],axis = 1)
-    b_field = np.stack([bx,by,bz],axis = 1)
-
+    e_field = np.stack([ex, ey, ez], axis=1)
+    b_field = np.stack([bx, by, bz], axis=1)
     return e_field, b_field
 
+# non-relativistic boris
 def boris(bfield, efield, dt, vel_in, q_over_m):
-        # Non-relativistic
-    half_dt = dt * 0.5
+    half_dt = 0.5 * dt
     v_minus = vel_in + q_over_m * efield * half_dt
     t_vec = q_over_m * half_dt * bfield
-    t2 = np.sum(t_vec * t_vec,axis = 1)
-    s = (2*t_vec) / (1 + t2)[:,None]
+    t2 = np.sum(t_vec * t_vec, axis=1)
+    s_vec = 2.0 * t_vec / (1 + t2)[:, None]
     v_prime = v_minus + np.cross(v_minus, t_vec)
-    v_plus = v_minus + np.cross(v_prime,s)
+    v_plus = v_minus + np.cross(v_prime, s_vec)
     return v_plus + q_over_m * efield * half_dt
+
 
 def boris_pusher(pos0, vel0, q_over_m, dt, n_steps, fields, grid):
     n_particles = pos0.shape[0]
-
     Lx = grid["Lx"]
     Ly = grid["Ly"]
 
     pos_mod = pos0.copy()
     pos_unwrapped = pos0.copy()
 
-    pos_hist = np.zeros((n_steps +1, n_particles, 3), dtype = np.float64)
-    vel_hist = np.zeros((n_steps +1, n_particles, 3), dtype = np.float64)
-    vel_half_hist = np.zeros((n_steps +1, n_particles, 3), dtype = np.float64)
+    pos_hist = np.zeros((n_steps + 1, n_particles, 3), dtype=np.float64)
+    vel_hist = np.zeros((n_steps + 1, n_particles, 3), dtype=np.float64)
+    vel_half_hist = np.zeros((n_steps + 1, n_particles, 3), dtype=np.float64)
+
+    pos_hist[0] = pos_unwrapped
+    vel_hist[0] = vel0
 
     e0, b0 = interp_fields(pos_mod, fields, grid)
-    vel_half = boris(b0, e0, 0.5*dt, vel0.copy(), q_over_m)
+    vel_half = boris(b0, e0, 0.5 * dt, vel0.copy(), q_over_m)
     vel_half_hist[0] = vel_half
 
     for n in range(n_steps):
         pos_unwrapped = pos_unwrapped + vel_half * dt
 
-        #periodic
-        pos_mod[:,0] = np.mod(pos_unwrapped[:,0], Lx)
-        pos_mod[:,1] = np.mod(pos_unwrapped[:,1], Ly)
-        pos_mod[:2] = pos_unwrapped[:,2]
+        pos_mod[:, 0] = np.mod(pos_unwrapped[:, 0], Lx)
+        pos_mod[:, 1] = np.mod(pos_unwrapped[:, 1], Ly)
+        pos_mod[:, 2] = pos_unwrapped[:, 2]
 
-        pos_hist[n+1] = pos_unwrapped
+        pos_hist[n + 1] = pos_unwrapped
 
-        #interpolate!!
         e_local, b_local = interp_fields(pos_mod, fields, grid)
-
         vel_half = boris(b_local, e_local, dt, vel_half, q_over_m)
-        vel_half_hist[n+1] = vel_half
+        vel_half_hist[n + 1] = vel_half
 
-    for n in range(1, n_steps +1):
-        vel_hist[n] = 0.5 * (vel_half_hist[n-1] + vel_half_hist[n])
+    for n in range(1, n_steps + 1):
+        vel_hist[n] = 0.5 * (vel_half_hist[n - 1] + vel_half_hist[n])
 
     return pos_hist, vel_hist
 
-# defining a basis relative to the mean magnetic field
+# basis wrt to mean magnetic field
 def basis(b0_hat):
-    tmp = np.array([1, 0, 0], dtype = np.float64)
+    tmp = np.array([1, 0, 0], dtype=np.float64)
     if np.allclose(np.abs(np.dot(tmp, b0_hat)), 1):
-        tmp = np. array([0, 1, 0], dtype = np.float64)
-    
+        tmp = np.array([0, 1, 0], dtype=np.float64)
+
     e1 = tmp - np.dot(tmp, b0_hat) * b0_hat
     e1_hat = e1 / np.linalg.norm(e1)
     e2_hat = np.cross(b0_hat, e1_hat)
+    return e1_hat, e2_hat
 
-    return e1_hat , e2_hat
 
 def make_single_velocity(v_perp, b0_hat, phi=0.0, v_par=0.0):
     e1_hat, e2_hat = basis(b0_hat)
     vel = v_par * b0_hat + v_perp * (np.cos(phi) * e1_hat + np.sin(phi) * e2_hat)
     return vel[None, :]
 
+
 def fft_k(field: np.ndarray, dx: float, dy: float, subtract_mean: bool = True):
-    work = np.asarray(field, dtype = np.float64)
+    work = np.asarray(field, dtype=np.float64)
     if subtract_mean:
         work = work - work.mean()
 
     nx, ny = work.shape
     f_k = np.fft.fft2(work)
 
-    kx = 2.0 * np.pi * np.fft.fftfreq(nx, d=dx)
-    ky = 2.0 * np.pi * np.fft.fftfreq(ny, d=dy)
-    kx_grid, ky_grid = np.meshgrid(kx, ky, indexing = "ij")
-
+    kx = 2 * np.pi * np.fft.fftfreq(nx, d=dx)
+    ky = 2 * np.pi * np.fft.fftfreq(ny, d=dy)
+    kx_grid, ky_grid = np.meshgrid(kx, ky, indexing="ij")
     return f_k, kx_grid, ky_grid
 
+
 def mean_B0(fields: dict):
-    b0 = np.array (
+    b0 = np.array(
         [fields["Bx"].mean(), fields["By"].mean(), fields["Bz"].mean()],
-        dtype = np.float64
+        dtype=np.float64,
     )
 
     b0_mag = np.linalg.norm(b0)
-    if b0_mag <= 0.0:
-        raise ValueError("Mean mag field is zero")
-    
+    if b0_mag <= 0:
+        raise ValueError("Mean magnetic field is zero.")
+
     b0_hat = b0 / b0_mag
 
-    b0_xy = np.array([b0_hat[0], b0_hat[1], 0], dtype = np.float64)
+    b0_xy = np.array([b0_hat[0], b0_hat[1], 0], dtype=np.float64)
     b0_xy_mag = np.linalg.norm(b0_xy)
     if b0_xy_mag <= 0:
         raise ValueError("B0 has no x-y projection")
-    
-    b0_xy_hat = b0_xy / b0_xy_mag
 
+    b0_xy_hat = b0_xy / b0_xy_mag
     return b0, b0_hat, b0_xy_hat
 
-<<<<<<< ours
-=======
-b0, b0_hat, b0_xy_hat = mean_B0(fields)
 
->>>>>>> theirs
 def mag_power_spec(fields: dict, grid: dict):
-    bx_k, kx_grid, ky_grid = fft_k(fields["Bx"], grid["dx"], grid["dy"], subtract_mean = True)
-    by_k, ky_grid, ky_grid = fft_k(fields["By"], grid["dx"], grid["dy"], subtract_mean = True)
-    bz_k, kz_grid, kz_grid = fft_k(fields["Bz"], grid["dx"], grid["dy"], subtract_mean = True)
+    bx_k, kx_grid, ky_grid = fft_k(fields["Bx"], grid["dx"], grid["dy"], subtract_mean=True)
+    by_k, _, _ = fft_k(fields["By"], grid["dx"], grid["dy"], subtract_mean=True)
+    bz_k, _, _ = fft_k(fields["Bz"], grid["dx"], grid["dy"], subtract_mean=True)
 
-    power = np.abs(bx_k)**2 + np.abs(by_k)**2 + np.abs(bz_k)**2
-
+    power = np.abs(bx_k) ** 2 + np.abs(by_k) ** 2 + np.abs(bz_k) ** 2
     return power, kx_grid, ky_grid
+
 
 def angle_B0(kx_grid: np.ndarray, ky_grid: np.ndarray, b0_xy_hat: np.ndarray):
     kmag = np.hypot(kx_grid, ky_grid)
-
     k_dot_b = kx_grid * b0_xy_hat[0] + ky_grid * b0_xy_hat[1]
 
     cosang = np.zeros_like(kmag)
     nonzero = kmag > 0
     cosang[nonzero] = np.abs(k_dot_b[nonzero]) / kmag[nonzero]
     cosang = np.clip(cosang, 0, 1)
-
     return np.degrees(np.arccos(cosang))
+
 
 def pick_k(
     power: np.ndarray,
     kx_grid: np.ndarray,
     ky_grid: np.ndarray,
     angles_deg: np.ndarray,
-    target:str,
+    target: str,
 ):
     kmag = np.hypot(kx_grid, ky_grid)
     valid = kmag > 0
@@ -231,22 +255,20 @@ def pick_k(
     if target == "parallel":
         mask = valid & np.isclose(angles_deg, 0, atol=1e-9)
         if not np.any(mask):
-            mask = valid & np.isclose(angles_deg, np.min(angles_deg[valid]), atol = 1e-9)
-
+            mask = valid & np.isclose(angles_deg, np.min(angles_deg[valid]), atol=1e-9)
     elif target == "oblique":
-        target_angle = 45
+        target_angle = 45.0
         tol = 15.0
-        mask = valid & (np.abs(angles_deg - target_angle) <= tol)            
+        mask = valid & (np.abs(angles_deg - target_angle) <= tol)
         if not np.any(mask):
             best = np.argmin(np.abs(angles_deg[valid] - target_angle))
             flat_valid = np.flatnonzero(valid)
             chosen_flat = flat_valid[best]
-            mask = np.zeros_like(valid, dtype= bool)
+            mask = np.zeros_like(valid, dtype=bool)
             mask.flat[chosen_flat] = True
-
     else:
-        raise ValueError("must be parallel or oblique")
-        
+        raise ValueError("Must be 'parallel' or 'oblique'")
+
     masked_power = np.where(mask, power, -np.inf)
     idx_flat = int(np.argmax(masked_power))
     ix, iy = np.unravel_index(idx_flat, power.shape)
@@ -254,37 +276,35 @@ def pick_k(
     return {
         "ix": ix,
         "iy": iy,
-        "kx": float(kx_grid[ix,iy]),
-        "ky": float(ky_grid[ix,iy]),
-        "kmag": float(kmag[ix,iy]),
-        "lambda": float(2 * np.pi / kmag[ix,iy]),
-        "power": float(power[ix,iy]),
-        "angle_to_B0_deg": float(angles_deg[ix,iy]),
+        "kx": float(kx_grid[ix, iy]),
+        "ky": float(ky_grid[ix, iy]),
+        "kmag": float(kmag[ix, iy]),
+        "lambda": float(2.0 * np.pi / kmag[ix, iy]),
+        "power": float(power[ix, iy]),
+        "angle_to_B0_deg": float(angles_deg[ix, iy]),
         "case": target,
     }
 
-def omega(mode, c_wave = 1, b0_hat = None, use_parallel_dispersion = False):
+
+def omega(mode, c_wave=1.0, b0_hat=None, use_parallel_dispersion=False):
     if use_parallel_dispersion and b0_hat is not None:
-        k_vec = np.array([mode["kx"], mode["ky"],0],dtype = np.float64)
-        return c_wave * float(np.dot(k_vec,b0_hat))
+        k_vec = np.array([mode["kx"], mode["ky"], 0], dtype=np.float64)
+        return c_wave * float(np.dot(k_vec, b0_hat))
     return c_wave * mode["kmag"]
 
-def make_xy_mesh(nx,ny,dx,dy):
-    x = np.arange(nx, dtype = np.float64) * dx
-    y = np.arange(ny, dtype = np.float64) * dy
-    return np.meshgrid(x,y, indexing = "ij")
 
-<<<<<<< ours
-=======
-power, kx_grid, ky_grid = mag_power_spec(fields, grid)
-angles_deg = angle = angle_B0(kx_grid, ky_grid, b0_xy_hat)
+def make_xy_mesh(nx, ny, dx, dy):
+    x = np.arange(nx, dtype=np.float64) * dx
+    y = np.arange(ny, dtype=np.float64) * dy
+    return np.meshgrid(x, y, indexing="ij")
 
->>>>>>> theirs
+
 def project_coeff_k(coeff_vec, k_vec):
     k2 = float(np.dot(k_vec, k_vec))
     if k2 <= 0.0:
         return coeff_vec
-    return coeff_vec - (np.dot(k_vec, coeff_vec)/k2) * k_vec
+    return coeff_vec - (np.dot(k_vec, coeff_vec) / k2) * k_vec
+
 
 def project_coeff_axis_perp(coeff_vec, axis_vec):
     a2 = float(np.dot(axis_vec, axis_vec))
@@ -292,167 +312,345 @@ def project_coeff_axis_perp(coeff_vec, axis_vec):
         return coeff_vec
     return coeff_vec - (np.dot(axis_vec, coeff_vec) / a2) * axis_vec
 
-# see derivation in notes
+# derived from faradays law
 def parallel_e_from_b(coeff_b, k_vec, v_a):
     kmag = float(np.linalg.norm(k_vec))
-    if kmag <= 0:
-        return np.zeros(3, dtype = np.complex128)
+    if kmag <= 0.0:
+        return np.zeros(3, dtype=np.complex128)
     return -(v_a / kmag) * np.cross(k_vec, coeff_b)
 
+# derived from faradays law
 def oblique_e_from_b(coeff_b, k_vec, v_a, b0_hat):
     kmag = float(np.linalg.norm(k_vec))
-    if kmag <= 0:
-        return np.zeros(3, dtype = np.complex128)
-    
+    if kmag <= 0.0:
+        return np.zeros(3, dtype=np.complex128)
+
     k_dot_b0 = float(np.dot(k_vec, b0_hat))
     coeff_e_base = -(v_a * k_dot_b0 / (kmag * kmag)) * np.cross(k_vec, coeff_b)
-
-    if np.abs(k_dot_b0) <= 1e-15:
+    if np.abs(k_dot_b0) <= 1.0e-15:
         return coeff_e_base
-    
+
     alpha = -np.dot(coeff_e_base, b0_hat) / k_dot_b0
     return coeff_e_base + alpha * k_vec.astype(np.complex128)
 
+
 def reconstruct_using_coeff(
-        coeff,
-        nx,
-        ny,
-        grid,
-        mode,
-        t = 0,
-        c_wave = 1,
-        b0_hat = None,
-        use_parallel_dispersion = False,
+    coeff,
+    nx,
+    ny,
+    grid,
+    mode,
+    t=0.0,
+    c_wave=1.0,
+    b0_hat=None,
+    use_parallel_dispersion=False,
 ):
-    xg, yg = make_xy_mesh(nx,ny, grid["dx"], grid["dy"])
-    omega1 = omega(mode, c_wave, b0_hat = b0_hat, use_parallel_dispersion = use_parallel_dispersion)
-    phase_arg = mode["kx"] * xg + mode["ky"] * yg - omega1*t
+    xg, yg = make_xy_mesh(nx, ny, grid["dx"], grid["dy"])
+    omega1 = omega(mode, c_wave, b0_hat=b0_hat, use_parallel_dispersion=use_parallel_dispersion)
+    phase_arg = mode["kx"] * xg + mode["ky"] * yg - omega1 * t
 
     ix, iy = mode["ix"], mode["iy"]
     ix_conj = (-ix) % nx
     iy_conj = (-iy) % ny
-    factor = 1 if (ix_conj == ix and iy_conj == iy) else 2.0
-
+    factor = 1.0 if (ix_conj == ix and iy_conj == iy) else 2.0
     return factor * np.real(coeff * np.exp(1j * phase_arg))
 
+
 def reconstruct_fields(
-        fields,
-        grid,
-        mode,
-        t = 0,
-        c_wave = 1,
-        add_mean_e_fields = False,
-        add_mean_b_fields = True,
-        use_alfven_e_parallel = False,
-        use_alfven_e_oblique = False,
-        b0_hat = None,
+    fields,
+    grid,
+    mode,
+    t=0.0,
+    c_wave=1.0,
+    add_mean_e_fields=False,
+    add_mean_b_fields=True,
+    use_alfven_e_parallel=False,
+    use_alfven_e_oblique=False,
+    b0_hat=None,
 ):
-    reconstructed = {}
+    remade = {}
 
     nx, ny = fields["Bx"].shape
-<<<<<<< ours
-    k_vec = np.array([mode["kx"], mode["ky"], 0], dtyep = np.float64)
-=======
-    k_vec = np.array([mode["kx"], mode["ky"], 0], dtype = np.float64)
->>>>>>> theirs
+    k_vec = np.array([mode["kx"], mode["ky"], 0.0], dtype=np.float64)
     use_parallel_dispersion = use_alfven_e_oblique and (b0_hat is not None)
 
-    bx_k, _,_ = fft_k(fields["Bx"], grid["dx"], grid["dy"], subtract_mean = True)
-    by_k, _,_ = fft_k(fields["By"], grid["dx"], grid["dy"], subtract_mean = True)
-    bz_k, _,_ = fft_k(fields["Bz"], grid["dx"], grid["dy"], subtract_mean = True)
+    bx_k, _, _ = fft_k(fields["Bx"], grid["dx"], grid["dy"], subtract_mean=True)
+    by_k, _, _ = fft_k(fields["By"], grid["dx"], grid["dy"], subtract_mean=True)
+    bz_k, _, _ = fft_k(fields["Bz"], grid["dx"], grid["dy"], subtract_mean=True)
 
     coeff_b = np.array(
         [
-            bx_k[mode["ix"],mode["iy"] / (nx*ny)],
-            by_k[mode["ix"],mode["iy"] / (nx*ny)],
-            bz_k[mode["ix"],mode["iy"] / (nx*ny)],
+            bx_k[mode["ix"], mode["iy"]] / (nx * ny),
+            by_k[mode["ix"], mode["iy"]] / (nx * ny),
+            bz_k[mode["ix"], mode["iy"]] / (nx * ny),
         ],
-        dtype = np.complex128
+        dtype=np.complex128,
     )
     coeff_b = project_coeff_k(coeff_b, k_vec)
 
     if use_alfven_e_oblique and b0_hat is not None:
         coeff_e = oblique_e_from_b(coeff_b, k_vec, c_wave, b0_hat)
-
     elif use_alfven_e_parallel:
         if b0_hat is not None:
             coeff_b = project_coeff_axis_perp(coeff_b, b0_hat)
         coeff_e = parallel_e_from_b(coeff_b, k_vec, c_wave)
-
     else:
-        ex_k, _, _ = fft_k(fields["Ex"], grid["dx"], grid["dy"], subtract_mean = True)
-        ey_k, _, _ = fft_k(fields["Ey"], grid["dx"], grid["dy"], subtract_mean = True)
-        ez_k, _, _ = fft_k(fields["Ez"], grid["dx"], grid["dy"], subtract_mean = True)
+        ex_k, _, _ = fft_k(fields["Ex"], grid["dx"], grid["dy"], subtract_mean=True)
+        ey_k, _, _ = fft_k(fields["Ey"], grid["dx"], grid["dy"], subtract_mean=True)
+        ez_k, _, _ = fft_k(fields["Ez"], grid["dx"], grid["dy"], subtract_mean=True)
 
         coeff_e = np.array(
             [
-            ex_k[mode["ix"],mode["iy"] / (nx*ny)],
-            ey_k[mode["ix"],mode["iy"] / (nx*ny)],
-            ez_k[mode["ix"],mode["iy"] / (nx*ny)],    
+                ex_k[mode["ix"], mode["iy"]] / (nx * ny),
+                ey_k[mode["ix"], mode["iy"]] / (nx * ny),
+                ez_k[mode["ix"], mode["iy"]] / (nx * ny),
             ],
-            dtype = np.complex128,
+            dtype=np.complex128,
         )
 
-    reconstructed["Bx"] = reconstruct_using_coeff(
-        coeff_b[0], nx, ny, grid, mode, t=t, c_wave = c_wave,
-        b0_hat = b0_hat if use_parallel_dispersion else None,
-        use_parallel_dispersion = use_parallel_dispersion,
+    remade["Bx"] = reconstruct_using_coeff(
+        coeff_b[0],
+        nx,
+        ny,
+        grid,
+        mode,
+        t=t,
+        c_wave=c_wave,
+        b0_hat=b0_hat if use_parallel_dispersion else None,
+        use_parallel_dispersion=use_parallel_dispersion,
     )
-
-    reconstructed["By"] = reconstruct_using_coeff(
-        coeff_b[1], nx, ny, grid, mode, t=t, c_wave = c_wave,
-        b0_hat = b0_hat if use_parallel_dispersion else None,
-        use_parallel_dispersion = use_parallel_dispersion,
+    remade["By"] = reconstruct_using_coeff(
+        coeff_b[1],
+        nx,
+        ny,
+        grid,
+        mode,
+        t=t,
+        c_wave=c_wave,
+        b0_hat=b0_hat if use_parallel_dispersion else None,
+        use_parallel_dispersion=use_parallel_dispersion,
     )
-
-    reconstructed["Bz"] = reconstruct_using_coeff(
-        coeff_b[2], nx, ny, grid, mode, t=t, c_wave = c_wave,
-        b0_hat = b0_hat if use_parallel_dispersion else None,
-        use_parallel_dispersion = use_parallel_dispersion,
+    remade["Bz"] = reconstruct_using_coeff(
+        coeff_b[2],
+        nx,
+        ny,
+        grid,
+        mode,
+        t=t,
+        c_wave=c_wave,
+        b0_hat=b0_hat if use_parallel_dispersion else None,
+        use_parallel_dispersion=use_parallel_dispersion,
     )
-
-    reconstructed["Ex"] = reconstruct_using_coeff(
-        coeff_e[0], nx, ny, grid, mode, t=t, c_wave = c_wave,
-        b0_hat = b0_hat if use_parallel_dispersion else None,
-        use_parallel_dispersion = use_parallel_dispersion,
+    remade["Ex"] = reconstruct_using_coeff(
+        coeff_e[0],
+        nx,
+        ny,
+        grid,
+        mode,
+        t=t,
+        c_wave=c_wave,
+        b0_hat=b0_hat if use_parallel_dispersion else None,
+        use_parallel_dispersion=use_parallel_dispersion,
     )
-
-    reconstructed["Ey"] = reconstruct_using_coeff(
-        coeff_e[1], nx, ny, grid, mode, t=t, c_wave = c_wave,
-        b0_hat = b0_hat if use_parallel_dispersion else None,
-        use_parallel_dispersion = use_parallel_dispersion,
+    remade["Ey"] = reconstruct_using_coeff(
+        coeff_e[1],
+        nx,
+        ny,
+        grid,
+        mode,
+        t=t,
+        c_wave=c_wave,
+        b0_hat=b0_hat if use_parallel_dispersion else None,
+        use_parallel_dispersion=use_parallel_dispersion,
     )
-
-    reconstructed["Ez"] = reconstruct_using_coeff(
-        coeff_e[2], nx, ny, grid, mode, t=t, c_wave = c_wave,
-        b0_hat = b0_hat if use_parallel_dispersion else None,
-        use_parallel_dispersion = use_parallel_dispersion,
+    remade["Ez"] = reconstruct_using_coeff(
+        coeff_e[2],
+        nx,
+        ny,
+        grid,
+        mode,
+        t=t,
+        c_wave=c_wave,
+        b0_hat=b0_hat if use_parallel_dispersion else None,
+        use_parallel_dispersion=use_parallel_dispersion,
     )
 
     if add_mean_b_fields:
-        reconstructed["Bx"] += fields["Bx"].mean()
-        reconstructed["By"] += fields["By"].mean()
-        reconstructed["Bz"] += fields["Bz"].mean()
-    
-    if add_mean_b_fields:
-        reconstructed["Ex"] += fields["Ex"].mean()
-        reconstructed["Ey"] += fields["Ey"].mean()
-        reconstructed["Ez"] += fields["Ez"].mean()
+        remade["Bx"] += fields["Bx"].mean()
+        remade["By"] += fields["By"].mean()
+        remade["Bz"] += fields["Bz"].mean()
 
-    return reconstructed
+    if add_mean_e_fields:
+        remade["Ex"] += fields["Ex"].mean()
+        remade["Ey"] += fields["Ey"].mean()
+        remade["Ez"] += fields["Ez"].mean()
 
-
+    return remade
 
 
+def gyro(y: np.ndarray, window: int):
+    n_window = int(max(1, window))
+    if n_window <= 1:
+        return y.copy()
+    if n_window % 2 == 0:
+        n_window += 1
+    pad = n_window // 2
+    ypad = np.pad(y, (pad, pad), mode="edge")
+    kernel = np.ones(n_window, dtype=np.float64) / float(n_window)
+    return np.convolve(ypad, kernel, mode="valid")
 
-    
+# plotting exb from local field fluctuations in simulation and exb analytic expansion up to second order but not including non-linear terms or second order electric field
+def plot_exb(
+    t_arr: np.ndarray,
+    pos_hist: np.ndarray,
+    vel_hist: np.ndarray,
+    fields_case: dict,
+    grid: dict,
+    title_prefix: str,
+):
+    pos_wrap = pos_hist[:, 0, :].copy()
+    pos_wrap[:, 0] = np.mod(pos_wrap[:, 0], grid["Lx"])
+    pos_wrap[:, 1] = np.mod(pos_wrap[:, 1], grid["Ly"])
+
+    e_local, b_local = interp_fields(pos_wrap, fields_case, grid)
+    vel = vel_hist[:, 0, :]
+
+    eps = 1.0e-30
+    b0 = np.array(
+        [fields_case["Bx"].mean(), fields_case["By"].mean(), fields_case["Bz"].mean()],
+        dtype=np.float64,
+    )
+    e0 = np.array(
+        [fields_case["Ex"].mean(), fields_case["Ey"].mean(), fields_case["Ez"].mean()],
+        dtype=np.float64,
+    )
+
+    b0_mag = float(np.linalg.norm(b0))
+    if b0_mag <= eps:
+        raise ValueError("Mean B is zero; cannot build the ExB comparison.")
+
+    b0_hat = b0 / b0_mag
+
+    e1 = e_local - e0[None, :]
+    b1 = b_local - b0[None, :]
+    e2 = np.zeros_like(e1)
+
+    vexb_first = np.cross(e1, b0[None, :]) / max(b0_mag * b0_mag, eps)
+    s1 = np.sum(b1 * b0_hat[None, :], axis=1)
+    vexb_second_local = (
+        np.cross(e2, b0[None, :]) + np.cross(e1, b1)
+    ) / max(b0_mag * b0_mag, eps) - 2.0 * (s1 / max(b0_mag, eps))[:, None] * vexb_first
+
+    vexb_expanded = vexb_first + vexb_second_local
+    vexb_exact = np.cross(e_local, b_local) / np.maximum(np.sum(b_local * b_local, axis=1), eps)[:, None]
+
+    omega_i = np.abs(q) * b0_mag / m_i
+    gyro_steps = max(1, int(round((2.0 * np.pi / max(omega_i, eps)) / dt)))
+
+    vel_gyro = np.column_stack([gyro(vel[:, i], gyro_steps) for i in range(3)])
+    vexb_first_gyro = np.column_stack([gyro(vexb_first[:, i], gyro_steps) for i in range(3)])
+    vexb_expanded_gyro = np.column_stack([gyro(vexb_expanded[:, i], gyro_steps) for i in range(3)])
+    vexb_exact_gyro = np.column_stack([gyro(vexb_exact[:, i], gyro_steps) for i in range(3)])
+
+    component_labels = ("x", "y", "z")
+    fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True, constrained_layout=True)
+
+    for idx, comp in enumerate(component_labels):
+        axes[idx].plot(t_arr, vel[:, idx] / c, color="0.80", linewidth=1.0, label=rf"$v_{comp}/c$ (raw)")
+        axes[idx].plot(
+            t_arr,
+            vel_gyro[:, idx] / c,
+            color="k",
+            linewidth=2.0,
+            label=rf"$v_{comp}/c$ (gyro-avg)",
+        )
+        axes[idx].plot(
+            t_arr,
+            vexb_first_gyro[:, idx] / c,
+            color="tab:orange",
+            linestyle="--",
+            linewidth=1.8,
+            label=rf"$v_{{E,{comp}}}^{{(1)}}/c$ (gyro-avg)",
+        )
+        axes[idx].plot(
+            t_arr,
+            vexb_expanded_gyro[:, idx] / c,
+            color="tab:purple",
+            linestyle="-",
+            linewidth=2.0,
+            label=rf"$[v_{{E,{comp}}}^{{(1)}} + v_{{E,{comp}}}^{{(2)}}]/c$ (gyro-avg)",
+        )
+        axes[idx].plot(
+            t_arr,
+            vexb_exact_gyro[:, idx] / c,
+            color="tab:blue",
+            linestyle="-.",
+            linewidth=1.8,
+            label=rf"$[(E\times B)_{{{comp}}}/|B|^2]/c$ (gyro-avg)",
+        )
+        axes[idx].set_ylabel("velocity")
+        axes[idx].grid(True, ls=":")
+        axes[idx].legend(loc="best")
+
+    axes[0].set_title(f"{title_prefix}: expanded ExB vs component velocities")
+    axes[-1].set_xlabel("t")
+    plt.show()
 
 
-    
-    
+def start(target: str = "oblique"):
+    fields, grid = loadin_fields(filename, dx, dy)
+    b0, b0_hat, b0_xy_hat = mean_B0(fields)
 
+    power, kx_grid, ky_grid = mag_power_spec(fields, grid)
+    angles_deg = angle_B0(kx_grid, ky_grid, b0_xy_hat)
+    mode = pick_k(power, kx_grid, ky_grid, angles_deg, target=target)
 
+    reconstructed_fields = reconstruct_fields(
+        fields,
+        grid,
+        mode,
+        t=1e4,
+        c_wave=va_code,
+        add_mean_e_fields=False,
+        add_mean_b_fields=True,
+        use_alfven_e_parallel=(target == "parallel"),
+        use_alfven_e_oblique=(target == "oblique"),
+        b0_hat=b0_hat,
+    )
 
+#starting particle in the middle of the box
+    pos0 = np.array([[0.5 * grid["Lx"], 0.5 * grid["Ly"], 0.0]], dtype=np.float64)
 
+    _, b_launch_arr = interp_fields(pos0, reconstructed_fields, grid)
+    b_launch = b_launch_arr[0]
+    b_launch_mag = float(np.linalg.norm(b_launch))
+    if b_launch_mag <= 0.0:
+        raise ValueError("Launch magnetic field magnitude is zero.")
+    b_launch_hat = b_launch / b_launch_mag
 
+    lambda_ref = mode["lambda"]
+    rg_factor = 0.01
+    rg = rg_factor * lambda_ref
 
+    omega_i_local = np.abs(q) * b_launch_mag / m_i
+    v_perp = rg * omega_i_local
+    vel0 = make_single_velocity(v_perp, b_launch_hat, phi=0.0, v_par=0.0)
+
+    pos_hist, vel_hist = boris_pusher(
+        pos0,
+        vel0,
+        q_over_m,
+        dt,
+        n_steps,
+        reconstructed_fields,
+        grid,
+    )
+
+    t_arr = np.arange(n_steps + 1, dtype=np.float64) * dt
+    plot_exb(t_arr, pos_hist, vel_hist, reconstructed_fields, grid, f"{target.title()} - Magnetized")
+
+# can change target to parallel or oblique
+if __name__ == "__start__":
+    start(target="parallel")
+
+#%%
