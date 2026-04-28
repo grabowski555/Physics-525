@@ -1,0 +1,1 @@
+Plotting exb drift for ideal linear shear alfven wave particle trajectory. To run simulation must have a PIC snapshot downloaded. In the botom line change value between parallel and oblique to explore each case
