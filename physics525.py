@@ -11,14 +11,11 @@ n_steps = 1000
 dt = 300
 q_over_m = q / m_i
 
-<<<<<<< ours
-=======
 filename = "low_res_060000.h5"
 dx = 4
 dy = 4
 va_code = va_over_c * c
 
->>>>>>> theirs
 def loadin_fields(filename,dx,dy):
     with h5py.File(filename, "r") as f:
         fields = {
@@ -444,7 +441,6 @@ def reconstruct_fields(
 
     return reconstructed
 
-<<<<<<< ours
 
 
 
@@ -460,165 +456,3 @@ def reconstruct_fields(
 
 
 
-=======
-def gyro_average(y:np.ndarray, window:int):
-    n_window = int(max(1,window))
-    if n_window <= 1:
-        return y.copy()
-    if n_window % 2 == 0:
-        n_window += 1
-    pad = n_window // 2
-    ypad = np.pad(y, (pad, pad), mode = "edge")
-    kernel = np.ones(n_window, dtype = np.float64) / float(n_window)
-    return np.convolve(ypad, kernel, mode="valid")
-
-def plot_exb(
-        t_arr:np.ndarray,
-        pos_hist: np.ndarray,
-        vel_hist: np.ndarray,
-        fields_case: dict,
-        grid: dict,
-        title_prefix: str,
-):
-    pos_wrap = pos_hist[:,0,:].copy()
-    pos_wrap[:,0] = np.mod(pos_wrap[:,0], grid["Lx"])
-    pos_wrap[:,1] = np.mod(pos_wrap[:,1], grid["Ly"])
-
-    e_local, b_local = interp_fields(pos_wrap, fields_case,grid)
-    vel = vel_hist[:,0,:]
-
-    eps = 1e-30
-    b0 = np.array(
-        [fields_case["Bx"].mean(), fields_case["By"].mean(), fields_case["Bz"].mean()],
-        dtype = np.float64
-    )
-    e0 = np.array(
-        [fields_case["Ex"].mean(), fields_case["Ey"].mean(), fields_case["Ez"].mean()],
-        dtype = np.float64
-    )
-
-    b0_mag = float(np.linalg.norm(b0))
-    if b0_mag <= eps:
-        raise ValueError("Mean B is zero")
-    
-    b0_hat = b0 / b0_mag
-
-    e1 = e_local - e0[None,:]
-    b1 = b_local - b0[None,:]
-    e2 = np.zeros_like(e1)
-
-    vexb_first = np.cross(e1, b0[None,:]) / max(b0_mag * b0_mag, eps)
-
-    s1 = np.sum(b1 * b0_hat[None, :], axis = 1)
-    vexb_second_local = (
-        np.cross(e2, b0[None,:]) + np.cross(e1,b1)
-    ) / max(b0_mag * b0_mag, eps) - 2 * (s1 / max(b0_mag,eps))[:,None] * vexb_first
-
-    vexb_expanded = vexb_first + vexb_second_local
-    vexb_exact = np.cross(e_local,b_local) / np.maximum(np.sum(b_local * b_local, axis = 1), eps)[:,None]
-    omega_i = np.abs(q) * b0_mag / m_i
-    gyro_steps = max(1, int(round((2 *np.pi /max(omega_i, eps))/dt)))
-
-    vel_gyro = np.column_stack([gyro_average(vel[:,i],gyro_steps) for i in range(3)])
-    vexb_first_gyro = np. column_stack([gyro_average(vexb_first[:,i], gyro_steps) for i in range(3)])
-    vexb_expanded_gyro = np. column_stack([gyro_average(vexb_expanded[:,i], gyro_steps) for i in range(3)])
-    vexb_exact_gyro = np. column_stack([gyro_average(vexb_exact[:,i], gyro_steps) for i in range(3)])
-
-    component_labels = ("x", "y", "z")
-    fig, axes = plt. subplots(3,1, figsize = (10,9), sharex = True, constrained_lyout = True)
-
-    for idx, comp in enumerate(component_labels):
-        axes[idx].plot(
-            t_arr,
-            vel[:,idx]/c,
-            color = "0.80",
-            linewidth = 1,
-            label = rf"$v_{comp}/c$(raw)",
-        )
-        axes[idx].plot(
-            t_arr,
-            vel_gyro[:,idx]/c,
-            color = "k",
-            linewidth = 2,
-            label = rf"$v_{comp}/c$(gyro-avg)",
-        )
-        axes[idx].plot(
-            t_arr,
-            vexb_first_gyro[:,idx]/c,
-            color = "tab:orange",
-            linestyle = "--",
-            linewidth = 1.8,
-            label = rf"$[v_{{E,{comp}}^{{(1)}}]/c$(gyro-avg)",
-        )
-        axes[idx].plot(
-            t_arr,
-            vexb_expanded_gyro[:,idx]/c,
-            color = "tab:purple",
-            linestyle = "-",
-            linewidth = 2,
-            label = rf"$[v_{{E,{comp}}}^{{(1)}}+v_{{E,{comp}}}^{{(2)}}]/c$ (gyro-avg)",
-        )
-        axes[idx].plot(
-            t_arr,
-            vexb_exact_gyro[:,idx]/c,
-            color = "tab:blue",
-            linestyle="-.",
-            linewidth = 1.8,
-            label = rf"$[(E/times B)_{comp}/|B|^2]/c$ (gyro-avg)",
-        )
-        axes[idx].set_ylabel("velocity")
-        axes[idx].grid(True, ls = ":")
-        axes[idx].legend(loc = "best")
-
-        axes[0].set_title(f"{title_prefix}:expanded Exb vs component velocities")
-        axes[-1].set_xlabel("t")
-
-        plt.show()
-
-mode = pick_k(power, kx_grid, ky_grid, angles_deg, target = "oblique")
-# mode = pick_k(power, kx_grid, ky_grid, angles_deg, target = "parallel")
-
-reconstructed_fields = reconstruct_fields(
-    fields,
-    grid,
-    mode,
-    t=1e4,
-    c_wave = va_code,
-    add_mean_e_fields = False,
-    add_mean_b_fields = False,
-    use_alfven_e_parallel = False,
-    use_alfven_e_oblique = True,
-    b0_hat = b0_hat,
-)
-
-pos0 = np.array([[0.5 * grid["Lx"], 0.5 * grid["Ly"], 0]], dtype = np.float64)
-
-_, b_launch_arr = interp_fields(pos0, reconstructed_fields, grid)
-b_launch = b_launch_arr[0]
-b_launch_mag = float(np.linalg.norm(b_launch))
-b_launch_hat = b_launch / b_launch_mag
-
-lambda_ref = mode["lambda"]
-rg_factor = 0.01
-rg = rg_factor * lambda_ref
-
-omega_i_local = np.abs(q) * b_launch_mag / m_i
-v_perp = rg * omega_i_local
-
-vel0 = make_single_velocity(v_perp,b_launch_hat, phi =0, v_par = 0)
-
-pos_hist, vel_hist = boris_pusher(
-    pos0,
-    vel0,
-    q_over_m,
-    dt,
-    n_steps,
-    reconstructed_fields,
-    grid,
-)
-
-t_arr = np.arange(n_steps +1, dtype = np.float64) * 64
-plot_exb(
-    t_arr, pos_hist, vel_hist, reconstructed_fields, grid, "oblique - magnetized"
-)
->>>>>>> theirs
